@@ -59,10 +59,16 @@ API definition and user-provided parameters. This avoids manual CLI syntax error
 
 ### 4. Execution Choice
 
-Use `AlibabaCloud___CallCLI` for one known API call or generated command. Use
-`AlibabaCloud___RunScript` for multi-call work: pagination, List-to-Describe
-enrichment, cross-resource comparison, multi-region/multi-product collection,
-permission checks, or response-driven follow-up calls.
+Use `AlibabaCloud___CallCLI` for one known `aliyun ...` command when no later
+call depends on its response. Verified example:
+`AlibabaCloud___CallCLI(command="aliyun sts get-caller-identity")`.
+
+Use `AlibabaCloud___RunScript` when the answer needs structured OpenAPI
+`call_cli(...)`: pagination, List-to-Describe enrichment, cross-resource
+comparison, multi-region/multi-product collection, permission checks, OSS
+body/bytes handling, response-driven follow-up calls, or custom result shaping.
+Example: fetch identity, list resources, and perform follow-up Describe/Get
+calls in one script instead of separate tool round-trips.
 
 Do not split one user task across multiple `RunScript` submissions just to
 inspect intermediate data. Put discovery, pagination, filtering, and follow-up
@@ -79,24 +85,42 @@ Use `AlibabaCloud___CallCLI` to execute the generated command. Key constraints:
 
 ### 6. Scripted Multi-Call Execution
 
-`AlibabaCloud___RunScript` starts an async sandboxed Python task and returns a
-`processID`. The script's OpenAPI access goes through injected `call_cli()` only:
+`AlibabaCloud___RunScript` starts a sandboxed Python task and waits up to 20
+seconds. It may return `result` directly; otherwise use the returned `processID`
+and `nextAction` with `AlibabaCloud___GetTask`. The script's OpenAPI access goes
+through injected `call_cli()` only:
 
 ```python
-result = await call_cli(product='Ecs', action='DescribeInstances',
-                        params={'RegionId': 'cn-hangzhou'},
-                        version='2014-05-26', region='cn-hangzhou')
+identity = await call_cli(product='Sts', action='GetCallerIdentity',
+                          params={}, version='2015-04-01')
+result = {'has_account_id': 'AccountId' in identity}
 ```
 
 RunScript essentials:
 
 - `call_cli()` is structured OpenAPI, not CLI text. Never pass `aliyun ...`.
-- Use exact OpenAPI parameter names, usually PascalCase; arrays/objects stay as
-  Python lists/dicts unless the API parameter itself is JSON text.
+- Before unfamiliar APIs, OSS APIs, body/object params, array params, or
+  parameter retries, call `AlibabaCloud___GetApiDefinition` separately.
+- Top-level `params` keys must match OpenMeta `parameters[].name`. RPC APIs
+  often use `RegionId`; OSS APIs often use `bucket`, `max-keys`, `x-oss-acl`,
+  or `body`.
+- Arrays/objects stay as Python lists/dicts unless the API parameter itself is
+  JSON text.
 - `version`, `region`, and `endpoint` are optional; still pass API region fields
   such as `RegionId` when the API defines them.
 - Assign final output to `result`. Do not pass credentials, profiles, shell
   flags, or host file paths. Use `/tmp` only for small sandbox scratch files.
+- The script must have a reachable module-level `call_cli()`; pure Python
+  payloads fail validation.
+- Do not write `import` or comments. Safe modules such as `asyncio`, `json`,
+  `math`, `re`, `time`, and `uuid` are pre-imported.
+- Do not use sensitive names such as `eval`, `exec`, `compile`, `__import__`,
+  `globals`, `locals`, `getattr`, `setattr`, or `vars`; do not use private or
+  dunder attributes, dynamic `.format()` tricks, subprocesses, or network code.
+- Do not target CLI meta products such as `configure`, `plugin`, `ossutil`,
+  `ossutil64`, `upgrade`, or `mock`. Some OSS APIs are unsupported; if the
+  validator returns `UnsupportedOssApi`, choose a supported OSS OpenAPI action
+  or another tool.
 - Discover IDs inside the script, paginate every list call, and never sample or
   truncate complete inventory/compliance answers.
 - List APIs are not enough for attribute checks. Follow List with Describe/Get
@@ -108,17 +132,30 @@ RunScript essentials:
 - Do exact aggregation in Python; return raw fields for judgment calls such as
   "misconfigured" or "risky".
 
+OSS example:
+
+```python
+resp = await call_cli(product='Oss', action='ListBuckets',
+                      params={'max-keys': 1}, version='2019-05-17',
+                      region='cn-hangzhou')
+root = resp.get('ListAllMyBucketsResult', {})
+buckets = root.get('Buckets', {}).get('Bucket', [])
+if isinstance(buckets, dict):
+    buckets = [buckets]
+result = {'bucket_count_returned': len(buckets)}
+```
+
 ### 7. RunScript Task Polling
 
 After `AlibabaCloud___RunScript`, inspect `nextAction`:
 
 | `nextAction` | Meaning | Agent action |
 |--------------|---------|--------------|
-| `None` | Task succeeded | Use `result` and `callTrace` |
+| `None` | Task succeeded | Use `result` |
 | `CallGetTask` | Initial call is not terminal | Call `AlibabaCloud___GetTask` with the same `processID` |
 | `CallGetTaskAgain` | Poll timed out and task is still not terminal | Call `AlibabaCloud___GetTask` again with the same `processID` |
 | `Stop` | Validation failed, approval rejected/expired, task expired, or process missing | Stop; do not retry automatically |
-| `InspectError` | Execution failed | Inspect `error` and decide whether a corrected new script is needed |
+| `InspectError` | Execution failed | Inspect `error`; failed OpenAPI calls appear in `error.failedCall` when available |
 
 `AlibabaCloud___GetTask` parameters:
 
@@ -196,8 +233,10 @@ that are not captured in API definitions alone.
 - **RegionNotSupported**: Use `ListProductRegions` to find valid regions.
 - **RunScript ValidationFailed**: Fix unsafe or invalid Python authoring patterns
   before submitting a new `RunScript`.
-- **RunScript Failed / InspectError**: Inspect `error` and `callTrace`; if the
-  script needs correction, submit one new corrected `RunScript`.
+- **RunScript BLK-4002**: Add a reachable module-level `call_cli()`; pure Python
+  scripts are rejected.
+- **RunScript Failed / InspectError**: Inspect `error`; if the script needs
+  correction, submit one new corrected `RunScript`.
 
 ## Skill Discovery (Fallback)
 
