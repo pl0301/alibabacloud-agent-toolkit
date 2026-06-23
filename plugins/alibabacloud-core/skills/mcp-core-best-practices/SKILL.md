@@ -61,7 +61,7 @@ API definition and user-provided parameters. This avoids manual CLI syntax error
 
 Use `AlibabaCloud___CallCLI` for one known `aliyun ...` command when no later
 call depends on its response. Verified example:
-`AlibabaCloud___CallCLI(command="aliyun sts get-caller-identity")`.
+`AlibabaCloud___CallCLI(command="aliyun ecs DescribeRegions --region cn-hangzhou")`.
 
 Use `AlibabaCloud___RunScript` when the answer needs structured OpenAPI
 `call_cli(...)`: pagination, List-to-Describe enrichment, cross-resource
