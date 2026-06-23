@@ -106,6 +106,8 @@ RunScript essentials:
   or `body`.
 - Arrays/objects stay as Python lists/dicts unless the API parameter itself is
   JSON text.
+- For OSS object bytes, `PutObject` accepts bytes in `params['body']` and
+  `GetObject` returns bytes in `Body`.
 - `version`, `region`, and `endpoint` are optional; still pass API region fields
   such as `RegionId` when the API defines them.
 - Assign final output to `result`. Do not pass credentials, profiles, shell
@@ -132,17 +134,19 @@ RunScript essentials:
 - Do exact aggregation in Python; return raw fields for judgment calls such as
   "misconfigured" or "risky".
 
-OSS example:
+OSS object read/write example (use a user-approved temporary bucket/key):
 
 ```python
-resp = await call_cli(product='Oss', action='ListBuckets',
-                      params={'max-keys': 1}, version='2019-05-17',
-                      region='cn-hangzhou')
-root = resp.get('ListAllMyBucketsResult', {})
-buckets = root.get('Buckets', {}).get('Bucket', [])
-if isinstance(buckets, dict):
-    buckets = [buckets]
-result = {'bucket_count_returned': len(buckets)}
+bucket = '<approved-bucket>'
+key = 'run-script-probe/example.txt'
+content = b'hello-from-run-script\n'
+put = await call_cli(product='Oss', action='PutObject',
+                     params={'bucket': bucket, 'key': key, 'body': content},
+                     version='2019-05-17', region='cn-hangzhou')
+got = await call_cli(product='Oss', action='GetObject',
+                     params={'bucket': bucket, 'key': key},
+                     version='2019-05-17', region='cn-hangzhou')
+result = {'put_ok': isinstance(put, dict), 'round_trip_ok': got.get('Body') == content}
 ```
 
 ### 7. RunScript Task Polling
